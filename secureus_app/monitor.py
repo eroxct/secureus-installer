@@ -298,12 +298,12 @@ def score_device(device):
 
 # ── Workers ───────────────────────────────────────────────────────────────────
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
-    QProgressBar, QSpinBox, QComboBox,
+    QProgressBar,
 )
 from PyQt5.QtGui import QColor, QPalette, QFont
 
@@ -759,8 +759,6 @@ class SecureUSApp(QMainWindow):
         self._clock_timer.timeout.connect(self._tick_clock)
         self._build()
         self.setStyleSheet(APP_STYLE)
-        # Auto-start scan when the window opens
-        QTimer.singleShot(300, self.start_scan)
 
     def _build(self):
         central = QWidget()
@@ -828,8 +826,23 @@ class SecureUSApp(QMainWindow):
         return nav
 
     def _open_web_app(self):
-        import webbrowser
-        webbrowser.open("https://secureus-yv9w.onrender.com")
+        import webbrowser, threading, time
+
+        def _launch():
+            try:
+                # Try to start the Flask server in a background thread
+                import importlib, os
+                pkg_dir = os.path.dirname(__file__)
+                os.environ.setdefault("SECUREUS_NO_BROWSER", "1")
+                from secureus_app.app import app as flask_app
+                time.sleep(0.5)
+                webbrowser.open("http://127.0.0.1:5000")
+                flask_app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+            except Exception as e:
+                webbrowser.open("https://secureus.com")
+
+        t = threading.Thread(target=_launch, daemon=True)
+        t.start()
 
     def _toolbar(self):
         row = QHBoxLayout()
@@ -848,13 +861,14 @@ class SecureUSApp(QMainWindow):
         self.export_btn.clicked.connect(self.export_csv)
         self.clear_btn.clicked.connect(self.clear_all)
 
-        # Duration selector
-        dur_lbl = QLabel("Run for:")
+        # Duration selector (optional auto-stop)
+        dur_lbl = QLabel("Stop after:")
         dur_lbl.setStyleSheet(f"font-size:12px; color:{C['slate']}; background:transparent;")
         self.dur_spin = QSpinBox()
-        self.dur_spin.setRange(1, 24)
-        self.dur_spin.setValue(1)
-        self.dur_spin.setFixedWidth(52)
+        self.dur_spin.setRange(0, 24)
+        self.dur_spin.setValue(0)
+        self.dur_spin.setSpecialValueText("Never")
+        self.dur_spin.setFixedWidth(60)
         self.dur_spin.setStyleSheet(f"""
             QSpinBox {{ background:{C['navy3']}; color:{C['light']};
                 border:1px solid rgba(255,255,255,0.12); border-radius:6px;
@@ -872,7 +886,7 @@ class SecureUSApp(QMainWindow):
             QComboBox QAbstractItemView {{ background:{C['navy3']}; color:{C['light']}; }}
         """)
 
-        # Elapsed timer display
+        # Running timer display
         self.timer_lbl = QLabel("00:00:00")
         self.timer_lbl.setStyleSheet(
             f"font-size:14px; font-weight:700; color:{C['purple3']};"
@@ -1038,11 +1052,12 @@ class SecureUSApp(QMainWindow):
         self.pbar.setValue(0)
         self.status.update("scanning", "Checking your network…",
             "This takes about 30–60 seconds depending on how many devices are connected.")
-        # Start elapsed clock
+        # Start the elapsed clock — it keeps running through watch phase
         self._elapsed_secs = 0
+        self.timer_lbl.setText("00:00:00")
         val  = self.dur_spin.value()
         unit = self.dur_unit.currentText()
-        self._limit_secs = val * 60 if unit == "min" else val * 3600
+        self._limit_secs = (val * 60 if unit == "min" else val * 3600) if val > 0 else 0
         self._clock_timer.start()
         self.scan_worker = ScanWorker()
         self.scan_worker.progress.connect(self._on_progress)
@@ -1052,20 +1067,21 @@ class SecureUSApp(QMainWindow):
         self.scan_worker.start()
 
     def stop_scan(self):
-        """User-initiated stop."""
+        """Stop everything — scan and watch — and freeze the timer."""
         self._clock_timer.stop()
         if self.scan_worker and self.scan_worker.isRunning():
             self.scan_worker.stop()
+        self._stop_watch()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("▶  Scan Again")
         self.stop_btn.setEnabled(False)
         self.pframe.hide()
-        self.status_lbl.setText("Scan stopped by user.")
+        self.status_lbl.setText("Stopped.")
         if self.devices:
-            self.status.update("idle", "Scan stopped",
-                f"{len(self.devices)} devices found so far. Press Scan Again to restart.")
             self.export_btn.setEnabled(True)
             self.clear_btn.setEnabled(True)
+            self.status.update("idle", "Stopped",
+                f"{len(self.devices)} devices found. Press Scan Again to restart.")
 
     def _tick_clock(self):
         self._elapsed_secs += 1
@@ -1073,7 +1089,7 @@ class SecureUSApp(QMainWindow):
         m = (self._elapsed_secs % 3600) // 60
         s = self._elapsed_secs % 60
         self.timer_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
-        # Auto-stop when time limit reached
+        # Auto-stop when time limit reached (0 = no limit)
         if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
             self.stop_scan()
 
@@ -1124,13 +1140,12 @@ class SecureUSApp(QMainWindow):
 
     def _on_done(self, devices):
         self.devices = devices
-        self._clock_timer.stop()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("▶  Scan Again")
-        self.stop_btn.setEnabled(False)
         self.pframe.hide()
         self.export_btn.setEnabled(True)
         self.clear_btn.setEnabled(True)
+        # Clock keeps running — it only stops when the user hits Stop
 
         n_critical = sum(1 for d in devices if d["level"] == "critical")
         n_warning  = sum(1 for d in devices if d["level"] == "warning")
@@ -1146,12 +1161,12 @@ class SecureUSApp(QMainWindow):
                 f"{n_warning} device{'s' if n_warning != 1 else ''} worth taking a closer look at.",
                 len(devices), n_threats, n_safe)
         else:
-            self.status.update("safe", "Your network looks safe",
-                f"All {len(devices)} device{'s' if len(devices) != 1 else ''} passed the security check.",
+            self.status.update("safe", "Your network looks safe — now watching for changes",
+                f"All {len(devices)} device{'s' if len(devices) != 1 else ''} passed the check. Monitoring for new devices.",
                 len(devices), 0, n_safe)
 
         self.status_lbl.setText(
-            f"Scan complete — {len(devices)} devices found, {n_threats} alerts.")
+            f"Scan complete — {len(devices)} devices found, {n_threats} alerts. Watching for changes…")
 
         if not self.watching:
             self._start_watch([d["ip"] for d in devices])
@@ -1191,6 +1206,9 @@ class SecureUSApp(QMainWindow):
         self.watch_btn.setText("👁  Start Watching")
         if self.watch_worker:
             self.watch_worker.stop()
+        # Clock stops when watching stops
+        self._clock_timer.stop()
+        self.stop_btn.setEnabled(False)
 
     def _on_new_device(self, device):
         self.devices.append(device)
@@ -1232,21 +1250,15 @@ class SecureUSApp(QMainWindow):
         if not self.devices:
             QMessageBox.information(self, "No data", "Run a scan first.")
             return
-        default_name = f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save scan results",
-            default_name,
-            "CSV files (*.csv);;All files (*)")
+            self, "Save scan",
+            f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            "CSV files (*.csv)")
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
-        try:
-            self._write_csv(path)
-            QMessageBox.information(self, "Saved ✓",
-                f"Scan saved to:\n{path}\n\nUpload this file to SecureUS for a full AI report.")
-        except Exception as e:
-            QMessageBox.critical(self, "Save failed", f"Could not save file:\n{str(e)}")
+        self._write_csv(path)
+        QMessageBox.information(self, "Saved",
+            f"Scan saved to:\n{path}\n\nUpload this file to SecureUS for a full AI report.")
 
     def export_and_open(self):
         if not self.devices:
@@ -1257,7 +1269,7 @@ class SecureUSApp(QMainWindow):
             tempfile.gettempdir(),
             f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self._write_csv(path)
-        webbrowser.open("https://secureus-yv9w.onrender.com")
+        webbrowser.open("https://secureus.com/upload")
         QMessageBox.information(self, "Ready",
             f"Your scan has been saved to:\n{path}\n\n"
             "SecureUS has opened in your browser. Upload this file for a full AI-powered report.")
