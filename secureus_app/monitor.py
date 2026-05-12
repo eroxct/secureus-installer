@@ -298,12 +298,12 @@ def score_device(device):
 
 # ── Workers ───────────────────────────────────────────────────────────────────
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
-    QProgressBar,
+    QProgressBar, QSpinBox, QComboBox,
 )
 from PyQt5.QtGui import QColor, QPalette, QFont
 
@@ -751,8 +751,16 @@ class SecureUSApp(QMainWindow):
         self.scan_worker  = None
         self.watch_worker = None
         self.watching     = False
+        # Timer state
+        self._elapsed_secs = 0
+        self._limit_secs   = 0   # 0 = no limit
+        self._clock_timer  = QTimer(self)
+        self._clock_timer.setInterval(1000)
+        self._clock_timer.timeout.connect(self._tick_clock)
         self._build()
         self.setStyleSheet(APP_STYLE)
+        # Auto-start scan when the window opens
+        QTimer.singleShot(300, self.start_scan)
 
     def _build(self):
         central = QWidget()
@@ -820,40 +828,68 @@ class SecureUSApp(QMainWindow):
         return nav
 
     def _open_web_app(self):
-        import webbrowser, threading, time
-
-        def _launch():
-            try:
-                # Try to start the Flask server in a background thread
-                import importlib, os
-                pkg_dir = os.path.dirname(__file__)
-                os.environ.setdefault("SECUREUS_NO_BROWSER", "1")
-                from secureus_app.app import app as flask_app
-                time.sleep(0.5)
-                webbrowser.open("http://127.0.0.1:5000")
-                flask_app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
-            except Exception as e:
-                webbrowser.open("https://secureus.com")
-
-        t = threading.Thread(target=_launch, daemon=True)
-        t.start()
+        import webbrowser
+        webbrowser.open("https://secureus-yv9w.onrender.com")
 
     def _toolbar(self):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.scan_btn   = make_btn("▶  Scan Now", "purple")
+        self.stop_btn   = make_btn("■  Stop", "ghost")
         self.watch_btn  = make_btn("👁  Start Watching", "ghost")
         self.export_btn = make_btn("↓  Save CSV", "green")
         self.clear_btn  = make_btn("Clear", "ghost", small=True)
+        self.stop_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.scan_btn.clicked.connect(self.start_scan)
+        self.stop_btn.clicked.connect(self.stop_scan)
         self.watch_btn.clicked.connect(self.toggle_watch)
         self.export_btn.clicked.connect(self.export_csv)
         self.clear_btn.clicked.connect(self.clear_all)
+
+        # Duration selector
+        dur_lbl = QLabel("Run for:")
+        dur_lbl.setStyleSheet(f"font-size:12px; color:{C['slate']}; background:transparent;")
+        self.dur_spin = QSpinBox()
+        self.dur_spin.setRange(1, 24)
+        self.dur_spin.setValue(1)
+        self.dur_spin.setFixedWidth(52)
+        self.dur_spin.setStyleSheet(f"""
+            QSpinBox {{ background:{C['navy3']}; color:{C['light']};
+                border:1px solid rgba(255,255,255,0.12); border-radius:6px;
+                padding:4px 6px; font-size:12px; }}
+            QSpinBox::up-button, QSpinBox::down-button {{ width:16px; }}
+        """)
+        self.dur_unit = QComboBox()
+        self.dur_unit.addItems(["min", "hr"])
+        self.dur_unit.setFixedWidth(54)
+        self.dur_unit.setStyleSheet(f"""
+            QComboBox {{ background:{C['navy3']}; color:{C['light']};
+                border:1px solid rgba(255,255,255,0.12); border-radius:6px;
+                padding:4px 8px; font-size:12px; }}
+            QComboBox::drop-down {{ border:none; width:18px; }}
+            QComboBox QAbstractItemView {{ background:{C['navy3']}; color:{C['light']}; }}
+        """)
+
+        # Elapsed timer display
+        self.timer_lbl = QLabel("00:00:00")
+        self.timer_lbl.setStyleSheet(
+            f"font-size:14px; font-weight:700; color:{C['purple3']};"
+            f"background:rgba(124,58,237,0.10); border:1px solid rgba(124,58,237,0.25);"
+            f"border-radius:7px; padding:5px 14px;")
+        self.timer_lbl.setFixedWidth(100)
+
         row.addWidget(self.scan_btn)
+        row.addWidget(self.stop_btn)
         row.addWidget(self.watch_btn)
+        row.addSpacing(10)
+        row.addWidget(dur_lbl)
+        row.addWidget(self.dur_spin)
+        row.addWidget(self.dur_unit)
         row.addStretch()
+        row.addWidget(self.timer_lbl)
+        row.addSpacing(4)
         row.addWidget(self.clear_btn)
         row.addWidget(self.export_btn)
         self.ml.addLayout(row)
@@ -997,10 +1033,17 @@ class SecureUSApp(QMainWindow):
         self.clear_all()
         self.scan_btn.setEnabled(False)
         self.scan_btn.setText("Scanning…")
+        self.stop_btn.setEnabled(True)
         self.pframe.show()
         self.pbar.setValue(0)
         self.status.update("scanning", "Checking your network…",
             "This takes about 30–60 seconds depending on how many devices are connected.")
+        # Start elapsed clock
+        self._elapsed_secs = 0
+        val  = self.dur_spin.value()
+        unit = self.dur_unit.currentText()
+        self._limit_secs = val * 60 if unit == "min" else val * 3600
+        self._clock_timer.start()
         self.scan_worker = ScanWorker()
         self.scan_worker.progress.connect(self._on_progress)
         self.scan_worker.device_found.connect(self._on_device)
@@ -1008,21 +1051,38 @@ class SecureUSApp(QMainWindow):
         self.scan_worker.error.connect(self._on_error)
         self.scan_worker.start()
 
+    def stop_scan(self):
+        """User-initiated stop."""
+        self._clock_timer.stop()
+        if self.scan_worker and self.scan_worker.isRunning():
+            self.scan_worker.stop()
+        self.scan_btn.setEnabled(True)
+        self.scan_btn.setText("▶  Scan Again")
+        self.stop_btn.setEnabled(False)
+        self.pframe.hide()
+        self.status_lbl.setText("Scan stopped by user.")
+        if self.devices:
+            self.status.update("idle", "Scan stopped",
+                f"{len(self.devices)} devices found so far. Press Scan Again to restart.")
+            self.export_btn.setEnabled(True)
+            self.clear_btn.setEnabled(True)
+
+    def _tick_clock(self):
+        self._elapsed_secs += 1
+        h = self._elapsed_secs // 3600
+        m = (self._elapsed_secs % 3600) // 60
+        s = self._elapsed_secs % 60
+        self.timer_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        # Auto-stop when time limit reached
+        if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
+            self.stop_scan()
+
     def _on_progress(self, pct, msg):
         self.pbar.setValue(pct)
         self.plbl.setText(msg)
         self.status_lbl.setText(msg)
 
     def _on_device(self, device):
-        # Skip external/public IPs — only local network devices belong here
-        try:
-            import ipaddress as _ipa
-            _addr = _ipa.ip_address(device.get("ip", "0.0.0.0"))
-            if not (_addr.is_private or _addr.is_link_local or
-                    _addr.is_multicast or _addr.is_loopback):
-                return
-        except Exception:
-            pass
         self.devices.append(device)
         self._add_row(device)
         n = len(self.devices)
@@ -1064,8 +1124,10 @@ class SecureUSApp(QMainWindow):
 
     def _on_done(self, devices):
         self.devices = devices
+        self._clock_timer.stop()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("▶  Scan Again")
+        self.stop_btn.setEnabled(False)
         self.pframe.hide()
         self.export_btn.setEnabled(True)
         self.clear_btn.setEnabled(True)
@@ -1095,8 +1157,10 @@ class SecureUSApp(QMainWindow):
             self._start_watch([d["ip"] for d in devices])
 
     def _on_error(self, msg):
+        self._clock_timer.stop()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("▶  Scan Now")
+        self.stop_btn.setEnabled(False)
         self.pframe.hide()
         self.status_lbl.setText(f"Error: {msg}")
         self.status.update("idle", "Scan failed",
@@ -1129,15 +1193,6 @@ class SecureUSApp(QMainWindow):
             self.watch_worker.stop()
 
     def _on_new_device(self, device):
-        # Skip external/public IPs — only local network devices belong here
-        try:
-            import ipaddress as _ipa
-            _addr = _ipa.ip_address(device.get("ip", "0.0.0.0"))
-            if not (_addr.is_private or _addr.is_link_local or
-                    _addr.is_multicast or _addr.is_loopback):
-                return
-        except Exception:
-            pass
         self.devices.append(device)
         self._add_row(device)
         n = len(self.devices)
@@ -1161,17 +1216,6 @@ class SecureUSApp(QMainWindow):
             ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             gw  = get_gateway()
             for d in self.devices:
-                # Hard filter: never write external/public IPs to CSV
-                if not is_local_ip(d.get("ip", "")) and d.get("ip") not in ("0.0.0.0",):
-                    try:
-                        import ipaddress as _ip
-                        addr = _ip.ip_address(d.get("ip", ""))
-                        if not (addr.is_private or addr.is_link_local or
-                                addr.is_multicast or addr.is_loopback or
-                                str(addr) == "0.0.0.0"):
-                            continue  # skip this device entirely
-                    except Exception:
-                        pass
                 w.writerow([
                     ts,
                     d.get("ip", ""),
@@ -1188,15 +1232,21 @@ class SecureUSApp(QMainWindow):
         if not self.devices:
             QMessageBox.information(self, "No data", "Run a scan first.")
             return
+        default_name = f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save scan",
-            f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "CSV files (*.csv)")
+            self, "Save scan results",
+            default_name,
+            "CSV files (*.csv);;All files (*)")
         if not path:
             return
-        self._write_csv(path)
-        QMessageBox.information(self, "Saved",
-            f"Scan saved to:\n{path}\n\nUpload this file to SecureUS for a full AI report.")
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            self._write_csv(path)
+            QMessageBox.information(self, "Saved ✓",
+                f"Scan saved to:\n{path}\n\nUpload this file to SecureUS for a full AI report.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", f"Could not save file:\n{str(e)}")
 
     def export_and_open(self):
         if not self.devices:
@@ -1207,7 +1257,7 @@ class SecureUSApp(QMainWindow):
             tempfile.gettempdir(),
             f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self._write_csv(path)
-        webbrowser.open("https://secureus.com/upload")
+        webbrowser.open("https://secureus-yv9w.onrender.com")
         QMessageBox.information(self, "Ready",
             f"Your scan has been saved to:\n{path}\n\n"
             "SecureUS has opened in your browser. Upload this file for a full AI-powered report.")
@@ -1225,6 +1275,7 @@ class SecureUSApp(QMainWindow):
             "Press Scan Now to check every device on your network.")
 
     def closeEvent(self, event):
+        self._clock_timer.stop()
         if self.scan_worker:
             self.scan_worker.stop()
         if self.watch_worker:
