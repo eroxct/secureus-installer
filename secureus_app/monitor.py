@@ -12,41 +12,6 @@ from datetime import datetime
 from collections import defaultdict
 
 
-def main():
-    """Launched by the 'secureus-monitor' console script."""
-    try:
-        from PyQt5.QtWidgets import QApplication
-        from PyQt5.QtGui import QColor, QPalette
-    except ImportError:
-        print(
-            "\n  SecureUS Monitor requires PyQt5.\n"
-            "  Install it with:\n\n"
-            "    pip install secureus[desktop]\n\n"
-            "  or:\n\n"
-            "    pip install PyQt5\n"
-        )
-        sys.exit(1)
-
-    app = QApplication(sys.argv)
-    app.setApplicationName("SecureUS Network Monitor")
-    app.setStyle("Fusion")
-
-    C = _COLORS()
-    palette = QPalette()
-    palette.setColor(QPalette.Window,          QColor(C["navy"]))
-    palette.setColor(QPalette.WindowText,      QColor(C["light"]))
-    palette.setColor(QPalette.Base,            QColor(C["navy2"]))
-    palette.setColor(QPalette.Text,            QColor(C["light"]))
-    palette.setColor(QPalette.Button,          QColor(C["navy3"]))
-    palette.setColor(QPalette.ButtonText,      QColor(C["white"]))
-    palette.setColor(QPalette.Highlight,       QColor(C["purple"]))
-    palette.setColor(QPalette.HighlightedText, QColor(C["white"]))
-    app.setPalette(palette)
-
-    win = SecureUSApp()
-    win.show()
-    sys.exit(app.exec_())
-
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -295,24 +260,16 @@ def score_device(device):
     level = "critical" if score >= 60 else ("warning" if score >= 25 else "safe")
     return score, level, threats
 
-
 # ── Workers ───────────────────────────────────────────────────────────────────
-# PyQt5 is imported here at module level only after main() has already
-# verified the package is installed. If this file is imported directly
-# (e.g. during pip install introspection) and PyQt5 is missing, we skip
-# these definitions — main() will catch the ImportError and show a clear message.
-try:
-    from PyQt5.QtCore import Qt, QThread, pyqtSignal
-    from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-        QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
-        QProgressBar,
-    )
-    from PyQt5.QtGui import QColor, QPalette, QFont
-    _PYQT5_OK = True
-except ImportError:
-    _PYQT5_OK = False
+
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
+    QProgressBar, QSpinBox, QComboBox,
+)
+from PyQt5.QtGui import QColor, QPalette, QFont
 
 
 class ScanWorker(QThread):
@@ -1222,6 +1179,74 @@ class SecureUSApp(QMainWindow):
         if self.watch_worker:
             self.watch_worker.stop()
         event.accept()
+
+
+def main():
+    """Launched by the secureus-monitor entry point."""
+    import traceback
+
+    # Write crash logs to Desktop so silent failures are visible
+    log_path = os.path.join(os.path.expanduser("~"), "Desktop", "secureus_error.log")
+
+    def _show_error(title, msg):
+        """Show a GUI error dialog without needing PyQt5."""
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror(title, msg)
+            root.destroy()
+        except Exception:
+            # Last resort: write to log file on Desktop
+            try:
+                with open(log_path, "w") as f:
+                    f.write(msg)
+            except Exception:
+                pass
+
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtGui import QColor, QPalette
+    except ImportError:
+        _show_error(
+            "SecureUS — Missing dependency",
+            "PyQt5 is not installed.\n\n"
+            "Please run the installer again, or open a terminal and run:\n\n"
+            "    pip install PyQt5"
+        )
+        sys.exit(1)
+
+    try:
+        app = QApplication(sys.argv)
+        app.setApplicationName("SecureUS Network Monitor")
+        app.setStyle("Fusion")
+
+        C = _COLORS()
+        palette = QPalette()
+        palette.setColor(QPalette.Window,          QColor(C["navy"]))
+        palette.setColor(QPalette.WindowText,      QColor(C["light"]))
+        palette.setColor(QPalette.Base,            QColor(C["navy2"]))
+        palette.setColor(QPalette.Text,            QColor(C["light"]))
+        palette.setColor(QPalette.Button,          QColor(C["navy3"]))
+        palette.setColor(QPalette.ButtonText,      QColor(C["white"]))
+        palette.setColor(QPalette.Highlight,       QColor(C["purple"]))
+        palette.setColor(QPalette.HighlightedText, QColor(C["white"]))
+        app.setPalette(palette)
+
+        win = SecureUSApp()
+        win.show()
+        sys.exit(app.exec_())
+
+    except Exception:
+        err = traceback.format_exc()
+        _show_error("SecureUS — Startup error", err)
+        try:
+            with open(log_path, "w") as f:
+                f.write(err)
+        except Exception:
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":
