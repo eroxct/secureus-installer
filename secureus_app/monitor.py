@@ -309,7 +309,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
-    QProgressBar,
+    QProgressBar, QSpinBox, QComboBox,
 )
 from PyQt5.QtGui import QColor, QPalette, QFont
 
