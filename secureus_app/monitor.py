@@ -1084,8 +1084,17 @@ class SecureUSApp(QMainWindow):
         self.timer_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
         # Auto-stop when time limit reached (0 = no limit)
         if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
-            self.stop_scan()
+            self._limit_secs = -1   # prevent re-entry
+            self._clock_timer.stop()
             self._stop_watch()
+            if self.scan_worker and self.scan_worker.isRunning():
+                self.scan_worker.stop()
+            self.scan_btn.setEnabled(True)
+            self.scan_btn.setText("▶  Scan Again")
+            self.stop_btn.setEnabled(False)
+            self.pframe.hide()
+            self.export_btn.setEnabled(True)
+            self.clear_btn.setEnabled(True)
             self._auto_save_csv()
 
     def _on_progress(self, pct, msg):
@@ -1163,7 +1172,7 @@ class SecureUSApp(QMainWindow):
         self.status_lbl.setText(
             f"Scan complete — {len(devices)} devices found, {n_threats} alerts. Watching for changes…")
 
-        if not self.watching:
+        if not self.watching and self._limit_secs != -1:
             self._start_watch([d["ip"] for d in devices])
 
     def _on_error(self, msg):
