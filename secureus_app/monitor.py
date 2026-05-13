@@ -12,6 +12,41 @@ from datetime import datetime
 from collections import defaultdict
 
 
+def main():
+    """Launched by the 'secureus-monitor' console script."""
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtGui import QColor, QPalette
+    except ImportError:
+        print(
+            "\n  SecureUS Monitor requires PyQt5.\n"
+            "  Install it with:\n\n"
+            "    pip install secureus[desktop]\n\n"
+            "  or:\n\n"
+            "    pip install PyQt5\n"
+        )
+        sys.exit(1)
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("SecureUS Network Monitor")
+    app.setStyle("Fusion")
+
+    C = _COLORS()
+    palette = QPalette()
+    palette.setColor(QPalette.Window,          QColor(C["navy"]))
+    palette.setColor(QPalette.WindowText,      QColor(C["light"]))
+    palette.setColor(QPalette.Base,            QColor(C["navy2"]))
+    palette.setColor(QPalette.Text,            QColor(C["light"]))
+    palette.setColor(QPalette.Button,          QColor(C["navy3"]))
+    palette.setColor(QPalette.ButtonText,      QColor(C["white"]))
+    palette.setColor(QPalette.Highlight,       QColor(C["purple"]))
+    palette.setColor(QPalette.HighlightedText, QColor(C["white"]))
+    app.setPalette(palette)
+
+    win = SecureUSApp()
+    win.show()
+    sys.exit(app.exec_())
+
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 
@@ -266,6 +301,7 @@ def score_device(device):
     level = "critical" if score >= 60 else ("warning" if score >= 25 else "safe")
     return score, level, threats
 
+
 # ── Workers ───────────────────────────────────────────────────────────────────
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -273,7 +309,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QScrollArea, QSizePolicy, QFileDialog, QMessageBox,
-    QProgressBar, QSpinBox, QComboBox,
+    QProgressBar,
 )
 from PyQt5.QtGui import QColor, QPalette, QFont
 
@@ -721,8 +757,16 @@ class SecureUSApp(QMainWindow):
         self.scan_worker  = None
         self.watch_worker = None
         self.watching     = False
+        # Timer state
+        self._elapsed_secs = 0
+        self._limit_secs   = 0   # 0 = no limit
+        self._clock_timer  = QTimer(self)
+        self._clock_timer.setInterval(1000)
+        self._clock_timer.timeout.connect(self._tick_clock)
         self._build()
         self.setStyleSheet(APP_STYLE)
+        # Auto-start scan immediately on open; timer runs until user stops it
+        QTimer.singleShot(300, self.start_scan)
 
     def _build(self):
         central = QWidget()
@@ -797,18 +841,62 @@ class SecureUSApp(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(10)
         self.scan_btn   = make_btn("▶  Scan Now", "purple")
+        self.stop_btn   = make_btn("■  Stop", "ghost")
         self.watch_btn  = make_btn("👁  Start Watching", "ghost")
         self.export_btn = make_btn("↓  Save CSV", "green")
         self.clear_btn  = make_btn("Clear", "ghost", small=True)
+        self.stop_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.scan_btn.clicked.connect(self.start_scan)
+        self.stop_btn.clicked.connect(self.stop_scan)
         self.watch_btn.clicked.connect(self.toggle_watch)
         self.export_btn.clicked.connect(self.export_csv)
         self.clear_btn.clicked.connect(self.clear_all)
+
+        # Duration selector (optional auto-stop)
+        dur_lbl = QLabel("Stop after:")
+        dur_lbl.setStyleSheet(f"font-size:12px; color:{C['slate']}; background:transparent;")
+        self.dur_spin = QSpinBox()
+        self.dur_spin.setRange(0, 24)
+        self.dur_spin.setValue(0)
+        self.dur_spin.setSpecialValueText("Never")
+        self.dur_spin.setFixedWidth(60)
+        self.dur_spin.setStyleSheet(f"""
+            QSpinBox {{ background:{C['navy3']}; color:{C['light']};
+                border:1px solid rgba(255,255,255,0.12); border-radius:6px;
+                padding:4px 6px; font-size:12px; }}
+            QSpinBox::up-button, QSpinBox::down-button {{ width:16px; }}
+        """)
+        self.dur_unit = QComboBox()
+        self.dur_unit.addItems(["min", "hr"])
+        self.dur_unit.setFixedWidth(54)
+        self.dur_unit.setStyleSheet(f"""
+            QComboBox {{ background:{C['navy3']}; color:{C['light']};
+                border:1px solid rgba(255,255,255,0.12); border-radius:6px;
+                padding:4px 8px; font-size:12px; }}
+            QComboBox::drop-down {{ border:none; width:18px; }}
+            QComboBox QAbstractItemView {{ background:{C['navy3']}; color:{C['light']}; }}
+        """)
+
+        # Running timer display
+        self.timer_lbl = QLabel("00:00:00")
+        self.timer_lbl.setStyleSheet(
+            f"font-size:14px; font-weight:700; color:{C['purple3']};"
+            f"background:rgba(124,58,237,0.10); border:1px solid rgba(124,58,237,0.25);"
+            f"border-radius:7px; padding:5px 14px;")
+        self.timer_lbl.setFixedWidth(100)
+
         row.addWidget(self.scan_btn)
+        row.addWidget(self.stop_btn)
         row.addWidget(self.watch_btn)
+        row.addSpacing(10)
+        row.addWidget(dur_lbl)
+        row.addWidget(self.dur_spin)
+        row.addWidget(self.dur_unit)
         row.addStretch()
+        row.addWidget(self.timer_lbl)
+        row.addSpacing(4)
         row.addWidget(self.clear_btn)
         row.addWidget(self.export_btn)
         self.ml.addLayout(row)
@@ -952,10 +1040,18 @@ class SecureUSApp(QMainWindow):
         self.clear_all()
         self.scan_btn.setEnabled(False)
         self.scan_btn.setText("Scanning…")
+        self.stop_btn.setEnabled(True)
         self.pframe.show()
         self.pbar.setValue(0)
         self.status.update("scanning", "Checking your network…",
             "This takes about 30–60 seconds depending on how many devices are connected.")
+        # Start the elapsed clock — it keeps running through watch phase
+        self._elapsed_secs = 0
+        self.timer_lbl.setText("00:00:00")
+        val  = self.dur_spin.value()
+        unit = self.dur_unit.currentText()
+        self._limit_secs = (val * 60 if unit == "min" else val * 3600) if val > 0 else 0
+        self._clock_timer.start()
         self.scan_worker = ScanWorker()
         self.scan_worker.progress.connect(self._on_progress)
         self.scan_worker.device_found.connect(self._on_device)
@@ -963,21 +1059,39 @@ class SecureUSApp(QMainWindow):
         self.scan_worker.error.connect(self._on_error)
         self.scan_worker.start()
 
+    def stop_scan(self):
+        """Stop everything — scan and watch — and freeze the timer."""
+        self._clock_timer.stop()
+        if self.scan_worker and self.scan_worker.isRunning():
+            self.scan_worker.stop()
+        self._stop_watch()
+        self.scan_btn.setEnabled(True)
+        self.scan_btn.setText("▶  Scan Again")
+        self.stop_btn.setEnabled(False)
+        self.pframe.hide()
+        self.status_lbl.setText("Stopped.")
+        if self.devices:
+            self.export_btn.setEnabled(True)
+            self.clear_btn.setEnabled(True)
+            self.status.update("idle", "Stopped",
+                f"{len(self.devices)} devices found. Press Scan Again to restart.")
+
+    def _tick_clock(self):
+        self._elapsed_secs += 1
+        h = self._elapsed_secs // 3600
+        m = (self._elapsed_secs % 3600) // 60
+        s = self._elapsed_secs % 60
+        self.timer_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        # Auto-stop when time limit reached (0 = no limit)
+        if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
+            self.stop_scan()
+
     def _on_progress(self, pct, msg):
         self.pbar.setValue(pct)
         self.plbl.setText(msg)
         self.status_lbl.setText(msg)
 
     def _on_device(self, device):
-        # Skip external/public IPs — only local network devices belong here
-        try:
-            import ipaddress as _ipa
-            _addr = _ipa.ip_address(device.get("ip", "0.0.0.0"))
-            if not (_addr.is_private or _addr.is_link_local or
-                    _addr.is_multicast or _addr.is_loopback):
-                return
-        except Exception:
-            pass
         self.devices.append(device)
         self._add_row(device)
         n = len(self.devices)
@@ -1024,6 +1138,7 @@ class SecureUSApp(QMainWindow):
         self.pframe.hide()
         self.export_btn.setEnabled(True)
         self.clear_btn.setEnabled(True)
+        # Clock keeps running — it only stops when the user hits Stop
 
         n_critical = sum(1 for d in devices if d["level"] == "critical")
         n_warning  = sum(1 for d in devices if d["level"] == "warning")
@@ -1039,19 +1154,21 @@ class SecureUSApp(QMainWindow):
                 f"{n_warning} device{'s' if n_warning != 1 else ''} worth taking a closer look at.",
                 len(devices), n_threats, n_safe)
         else:
-            self.status.update("safe", "Your network looks safe",
-                f"All {len(devices)} device{'s' if len(devices) != 1 else ''} passed the security check.",
+            self.status.update("safe", "Your network looks safe — now watching for changes",
+                f"All {len(devices)} device{'s' if len(devices) != 1 else ''} passed the check. Monitoring for new devices.",
                 len(devices), 0, n_safe)
 
         self.status_lbl.setText(
-            f"Scan complete — {len(devices)} devices found, {n_threats} alerts.")
+            f"Scan complete — {len(devices)} devices found, {n_threats} alerts. Watching for changes…")
 
         if not self.watching:
             self._start_watch([d["ip"] for d in devices])
 
     def _on_error(self, msg):
+        self._clock_timer.stop()
         self.scan_btn.setEnabled(True)
         self.scan_btn.setText("▶  Scan Now")
+        self.stop_btn.setEnabled(False)
         self.pframe.hide()
         self.status_lbl.setText(f"Error: {msg}")
         self.status.update("idle", "Scan failed",
@@ -1082,17 +1199,11 @@ class SecureUSApp(QMainWindow):
         self.watch_btn.setText("👁  Start Watching")
         if self.watch_worker:
             self.watch_worker.stop()
+        # Clock stops when watching stops
+        self._clock_timer.stop()
+        self.stop_btn.setEnabled(False)
 
     def _on_new_device(self, device):
-        # Skip external/public IPs — only local network devices belong here
-        try:
-            import ipaddress as _ipa
-            _addr = _ipa.ip_address(device.get("ip", "0.0.0.0"))
-            if not (_addr.is_private or _addr.is_link_local or
-                    _addr.is_multicast or _addr.is_loopback):
-                return
-        except Exception:
-            pass
         self.devices.append(device)
         self._add_row(device)
         n = len(self.devices)
@@ -1116,17 +1227,6 @@ class SecureUSApp(QMainWindow):
             ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             gw  = get_gateway()
             for d in self.devices:
-                # Hard filter: never write external/public IPs to CSV
-                if not is_local_ip(d.get("ip", "")) and d.get("ip") not in ("0.0.0.0",):
-                    try:
-                        import ipaddress as _ip
-                        addr = _ip.ip_address(d.get("ip", ""))
-                        if not (addr.is_private or addr.is_link_local or
-                                addr.is_multicast or addr.is_loopback or
-                                str(addr) == "0.0.0.0"):
-                            continue  # skip this device entirely
-                    except Exception:
-                        pass
                 w.writerow([
                     ts,
                     d.get("ip", ""),
@@ -1162,7 +1262,7 @@ class SecureUSApp(QMainWindow):
             tempfile.gettempdir(),
             f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self._write_csv(path)
-        webbrowser.open("https://secureus-yv9w.onrender.com/upload")
+        webbrowser.open("https://secureus.com/upload")
         QMessageBox.information(self, "Ready",
             f"Your scan has been saved to:\n{path}\n\n"
             "SecureUS has opened in your browser. Upload this file for a full AI-powered report.")
@@ -1180,79 +1280,12 @@ class SecureUSApp(QMainWindow):
             "Press Scan Now to check every device on your network.")
 
     def closeEvent(self, event):
+        self._clock_timer.stop()
         if self.scan_worker:
             self.scan_worker.stop()
         if self.watch_worker:
             self.watch_worker.stop()
         event.accept()
-
-
-def main():
-    """Launched by the secureus-monitor entry point."""
-    import traceback
-
-    # Write crash logs to Desktop so silent failures are visible
-    log_path = os.path.join(os.path.expanduser("~"), "Desktop", "secureus_error.log")
-
-    def _show_error(title, msg):
-        """Show a GUI error dialog without needing PyQt5."""
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showerror(title, msg)
-            root.destroy()
-        except Exception:
-            # Last resort: write to log file on Desktop
-            try:
-                with open(log_path, "w") as f:
-                    f.write(msg)
-            except Exception:
-                pass
-
-    try:
-        from PyQt5.QtWidgets import QApplication
-        from PyQt5.QtGui import QColor, QPalette
-    except ImportError:
-        _show_error(
-            "SecureUS — Missing dependency",
-            "PyQt5 is not installed.\n\n"
-            "Please run the installer again, or open a terminal and run:\n\n"
-            "    pip install PyQt5"
-        )
-        sys.exit(1)
-
-    try:
-        app = QApplication(sys.argv)
-        app.setApplicationName("SecureUS Network Monitor")
-        app.setStyle("Fusion")
-
-        C = _COLORS()
-        palette = QPalette()
-        palette.setColor(QPalette.Window,          QColor(C["navy"]))
-        palette.setColor(QPalette.WindowText,      QColor(C["light"]))
-        palette.setColor(QPalette.Base,            QColor(C["navy2"]))
-        palette.setColor(QPalette.Text,            QColor(C["light"]))
-        palette.setColor(QPalette.Button,          QColor(C["navy3"]))
-        palette.setColor(QPalette.ButtonText,      QColor(C["white"]))
-        palette.setColor(QPalette.Highlight,       QColor(C["purple"]))
-        palette.setColor(QPalette.HighlightedText, QColor(C["white"]))
-        app.setPalette(palette)
-
-        win = SecureUSApp()
-        win.show()
-        sys.exit(app.exec_())
-
-    except Exception:
-        err = traceback.format_exc()
-        _show_error("SecureUS — Startup error", err)
-        try:
-            with open(log_path, "w") as f:
-                f.write(err)
-        except Exception:
-            pass
-        sys.exit(1)
 
 
 if __name__ == "__main__":
