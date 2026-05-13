@@ -1085,6 +1085,8 @@ class SecureUSApp(QMainWindow):
         # Auto-stop when time limit reached (0 = no limit)
         if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
             self.stop_scan()
+            self._stop_watch()
+            self._auto_save_csv()
 
     def _on_progress(self, pct, msg):
         self.pbar.setValue(pct)
@@ -1239,16 +1241,29 @@ class SecureUSApp(QMainWindow):
                     " | ".join(d.get("threats", [])),
                 ])
 
+    def _csv_folder(self):
+        """Return Desktop/SecureUScsv/, creating it if needed."""
+        folder = os.path.join(os.path.expanduser("~"), "Desktop", "SecureUScsv")
+        os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def _auto_save_csv(self):
+        """Save CSV silently to Desktop/SecureUScsv/ — called when timer limit ends."""
+        if not self.devices:
+            return
+        folder = self._csv_folder()
+        path = os.path.join(folder, f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        self._write_csv(path)
+        QMessageBox.information(self, "Scan Complete",
+            f"Timer limit reached. Scan saved to:\n{path}\n\n"
+            "Upload this file to SecureUS for a full AI-powered report.")
+
     def export_csv(self):
         if not self.devices:
             QMessageBox.information(self, "No data", "Run a scan first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save scan",
-            f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "CSV files (*.csv)")
-        if not path:
-            return
+        folder = self._csv_folder()
+        path = os.path.join(folder, f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self._write_csv(path)
         QMessageBox.information(self, "Saved",
             f"Scan saved to:\n{path}\n\nUpload this file to SecureUS for a full AI report.")
@@ -1257,15 +1272,14 @@ class SecureUSApp(QMainWindow):
         if not self.devices:
             QMessageBox.information(self, "No data", "Run a scan first.")
             return
-        import tempfile, webbrowser
-        path = os.path.join(
-            tempfile.gettempdir(),
-            f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        import webbrowser
+        folder = self._csv_folder()
+        path = os.path.join(folder, f"secureus_scan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         self._write_csv(path)
-        webbrowser.open("https://secureus.com/upload")
+        webbrowser.open("https://secureus-yv9w.onrender.com/upload")
         QMessageBox.information(self, "Ready",
-            f"Your scan has been saved to:\n{path}\n\n"
-            "SecureUS has opened in your browser. Upload this file for a full AI-powered report.")
+            f"Scan saved to:\n{path}\n\n"
+            "SecureUS has opened in your browser — upload this file for a full AI-powered report.")
 
     # ── Clear ─────────────────────────────────────────────────────────────
 
