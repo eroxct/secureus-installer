@@ -1082,19 +1082,33 @@ class SecureUSApp(QMainWindow):
         m = (self._elapsed_secs % 3600) // 60
         s = self._elapsed_secs % 60
         self.timer_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
-        # Auto-stop when time limit reached (0 = no limit)
-        if self._limit_secs > 0 and self._elapsed_secs >= self._limit_secs:
-            self._limit_secs = -1   # prevent re-entry
+
+        # Read limit live from spinbox every tick
+        val  = self.dur_spin.value()
+        unit = self.dur_unit.currentText()
+        limit = (val * 60 if unit == "min" else val * 3600) if val > 0 else 0
+
+        if limit > 0 and self._elapsed_secs >= limit:
+            # Stop clock first so this never fires again
             self._clock_timer.stop()
-            self._stop_watch()
+            # Stop watching inline
+            self.watching = False
+            self.watch_badge.hide()
+            self.watch_btn.setText("👁  Start Watching")
+            if self.watch_worker:
+                self.watch_worker.stop()
+            # Stop scanning inline
             if self.scan_worker and self.scan_worker.isRunning():
                 self.scan_worker.stop()
+            # Update UI
             self.scan_btn.setEnabled(True)
             self.scan_btn.setText("▶  Scan Again")
             self.stop_btn.setEnabled(False)
             self.pframe.hide()
             self.export_btn.setEnabled(True)
             self.clear_btn.setEnabled(True)
+            self.status_lbl.setText("Timer limit reached — stopped.")
+            # Auto-save
             self._auto_save_csv()
 
     def _on_progress(self, pct, msg):
@@ -1172,7 +1186,7 @@ class SecureUSApp(QMainWindow):
         self.status_lbl.setText(
             f"Scan complete — {len(devices)} devices found, {n_threats} alerts. Watching for changes…")
 
-        if not self.watching and self._limit_secs != -1:
+        if not self.watching and self._clock_timer.isActive():
             self._start_watch([d["ip"] for d in devices])
 
     def _on_error(self, msg):
