@@ -98,7 +98,7 @@ def get_local_ip():
 def get_gateway():
     try:
         if platform.system() == "Windows":
-            out = subprocess.check_output("ipconfig", text=True)
+            out = subprocess.check_output("ipconfig", text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             for line in out.splitlines():
                 if "Default Gateway" in line:
                     parts = line.split(":")
@@ -129,9 +129,15 @@ def ping_host(ip, timeout=0.5):
     try:
         if platform.system() == "Windows":
             cmd = ["ping", "-n", "1", "-w", str(int(timeout * 1000)), ip]
+            r = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
         else:
             cmd = ["ping", "-c", "1", "-W", str(int(timeout)), ip]
-        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return r.returncode == 0
     except Exception:
         return False
@@ -159,7 +165,7 @@ def get_arp_table():
     arp = {}
     try:
         if platform.system() == "Windows":
-            out = subprocess.check_output(["arp", "-a"], text=True)
+            out = subprocess.check_output(["arp", "-a"], text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             for line in out.splitlines():
                 parts = line.split()
                 if len(parts) >= 2:
