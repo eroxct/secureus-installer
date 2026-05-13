@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="secureus",
-    version="1.0.3",
+    version="1.0.4",
     description="SecureUS Network Monitor - desktop app",
     packages=find_packages(),
     install_requires=[
@@ -11,7 +11,9 @@ setup(
         "pandas>=2.0",
     ],
     entry_points={
-        "console_scripts": [
+        # gui_scripts uses pythonw.exe on Windows — no black console window flash.
+        # On Linux/macOS it behaves identically to console_scripts.
+        "gui_scripts": [
             "secureus-monitor=secureus_app.monitor:main",
         ],
     },
