@@ -37,9 +37,9 @@ if errorlevel 1 (
 )
 echo  [OK] Dependencies installed.
 echo  [..] Installing SecureUS app...
-python -m pip install https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip#egg=secureus[desktop] --quiet
+python -m pip install --no-cache-dir --force-reinstall https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip --quiet
 if errorlevel 1 (
-    python -m pip install https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip
+    python -m pip install --no-cache-dir --force-reinstall https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip
     if errorlevel 1 (
         echo  [ERROR] Could not install SecureUS app.
         echo  Please visit https://secureus-yv9w.onrender.com/support
