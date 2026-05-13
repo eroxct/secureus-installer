@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="secureus",
-    version="1.0.7",
+    version="1.0.8",
     description="SecureUS Network Monitor - desktop app",
     packages=["secureus_app"],
     package_dir={"secureus_app": "secureus_app"},
