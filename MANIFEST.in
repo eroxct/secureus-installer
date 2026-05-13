@@ -1,0 +1,2 @@
+recursive-include secureus_app *.py
+include setup.py
