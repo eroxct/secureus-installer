@@ -31,7 +31,7 @@ echo.
 python -m pip install flask werkzeug numpy pandas scikit-learn xgboost shap lime PyQt5 --quiet
 if errorlevel 1 (
     echo  [ERROR] Failed to install dependencies.
-    echo  Please visit https://secure-us.onrender.com/support
+    echo  Please visit https://secureus-yv9w.onrender.com/support
     pause
     exit /b 1
 )
@@ -42,7 +42,7 @@ if errorlevel 1 (
     python -m pip install https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip
     if errorlevel 1 (
         echo  [ERROR] Could not install SecureUS app.
-        echo  Please visit https://secure-us.onrender.com/support
+        echo  Please visit https://secureus-yv9w.onrender.com/support
         pause
         exit /b 1
     )
@@ -52,7 +52,7 @@ echo  [..] Creating desktop shortcut...
 set VBS=%USERPROFILE%\Desktop\SecureUS Monitor.vbs
 (
 echo Set WshShell = CreateObject^("WScript.Shell"^)
-echo WshShell.Run "secureus-monitor", 0, False
+echo WshShell.Run "secureus-monitor", 1, False
 ) > "%VBS%"
 set SM=%APPDATA%\Microsoft\Windows\Start Menu\Programs\SecureUS
 if not exist "%SM%" mkdir "%SM%"
