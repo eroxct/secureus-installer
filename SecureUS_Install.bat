@@ -37,27 +37,30 @@ if errorlevel 1 (
 )
 echo  [OK] Dependencies installed.
 echo  [..] Installing SecureUS app...
-python -m pip install --no-cache-dir --force-reinstall https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip --quiet
+python -m pip uninstall secureus -y >nul 2>&1
+python -m pip cache purge >nul 2>&1
+python -m pip install --no-cache-dir https://github.com/eroxct/secureus-installer/archive/refs/heads/release.zip --quiet
 if errorlevel 1 (
-    python -m pip install --no-cache-dir --force-reinstall https://github.com/eroxct/secureus-installer/archive/refs/heads/main.zip
-    if errorlevel 1 (
-        echo  [ERROR] Could not install SecureUS app.
-        echo  Please visit https://secureus-yv9w.onrender.com/support
-        pause
-        exit /b 1
-    )
+    echo  [ERROR] Could not install SecureUS app.
+    echo  Please visit https://secureus-yv9w.onrender.com/support
+    pause
+    exit /b 1
 )
 echo  [OK] SecureUS installed successfully!
+echo  [..] Verifying installation...
+python -m pip show secureus | findstr /i "version location"
 echo  [..] Creating desktop shortcut...
+for /f "tokens=2 delims= " %%p in ('python -c "import sys; print(sys.executable)"') do set PYEXE=%%p
+for /f %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable), 'Scripts', 'secureus-monitor.exe'))"') do set MONITOR_EXE=%%p
 set VBS=%USERPROFILE%\Desktop\SecureUS Monitor.vbs
 (
 echo Set WshShell = CreateObject^("WScript.Shell"^)
-echo WshShell.Run "secureus-monitor", 1, False
+echo WshShell.Run "%MONITOR_EXE%", 1, False
 ) > "%VBS%"
 set SM=%APPDATA%\Microsoft\Windows\Start Menu\Programs\SecureUS
 if not exist "%SM%" mkdir "%SM%"
 copy "%VBS%" "%SM%\SecureUS Monitor.vbs" >nul 2>&1
-echo  [OK] Shortcuts created.
+echo  [OK] Shortcuts created ^(pointing to %MONITOR_EXE%^)
 echo.
 echo  =============================================
 echo   Done! SecureUS Monitor is installed.
